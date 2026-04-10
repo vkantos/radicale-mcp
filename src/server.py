@@ -97,8 +97,14 @@ def reconnect() -> dict:
 
 
 @mcp.tool
-def create_event(title: str, start_time: str, end_time: str) -> dict:
-    """Create a new event on the calendar. Time in ISO format (e.g., '2026-01-14T02:16:17.478')"""
+def create_event(
+    title: str,
+    start_time: str,
+    end_time: str,
+    description: str = "",
+    location: str = "",
+) -> dict:
+    """Create a new event on the calendar. Time in ISO format (e.g., '2026-01-14T02:16:17.478'). description and location are optional notes/place for the event."""
     try:
         # Check if connected, if not, connect
         if not caldav_client.is_connected():
@@ -110,7 +116,13 @@ def create_event(title: str, start_time: str, end_time: str) -> dict:
         start_dt = _parse_to_tz(start_time)
         end_dt = _parse_to_tz(end_time)
 
-        event = Event(title=title, start_time=start_dt, end_time=end_dt)
+        event = Event(
+            title=title,
+            description=description,
+            location=location,
+            start_time=start_dt,
+            end_time=end_dt,
+        )
         created_event_id = caldav_client.create_event(event)
         if not created_event_id:
             return {"error": "Failed to create event"}
@@ -131,8 +143,10 @@ def create_recurring_event(
     frequency: str,
     interval: int = 1,
     count: int = None,
+    description: str = "",
+    location: str = "",
 ) -> dict:
-    """Create a recurring event on the calendar. Time in ISO format (e.g., '2026-01-14T02:16:17.478'). Frequency (YEARLY, MONTHLY, WEEKLY, DAILY). Interval between recurrences (default: 1). Number of occurrences (optional)"""
+    """Create a recurring event on the calendar. Time in ISO format (e.g., '2026-01-14T02:16:17.478'). Frequency (YEARLY, MONTHLY, WEEKLY, DAILY). Interval between recurrences (default: 1). Number of occurrences (optional). description and location are optional notes/place for the event."""
     try:
         # Check if connected, if not, connect
         if not caldav_client.is_connected():
@@ -152,7 +166,14 @@ def create_recurring_event(
         end_dt = _parse_to_tz(end_time)
 
         # Create Event with recurrence rule
-        event = Event(title=title, start_time=start_dt, end_time=end_dt, rrule=rrule)
+        event = Event(
+            title=title,
+            description=description,
+            location=location,
+            start_time=start_dt,
+            end_time=end_dt,
+            rrule=rrule,
+        )
         created_event_id = caldav_client.create_event(event)
         if not created_event_id:
             return {"error": "Failed to create recurring event"}
@@ -213,6 +234,70 @@ def delete_event(id: str) -> dict:
 
 
 @mcp.tool
+def get_event(id: str) -> dict:
+    """Retrieve a single event by ID."""
+    try:
+        if not caldav_client.is_connected():
+            success = caldav_client.connect()
+            if not success:
+                return {"error": "Failed to connect to the calendar"}
+        event = caldav_client.read_event(id)
+        if event is None:
+            return {"error": f"Event {id} not found"}
+        if hasattr(event, "to_dict"):
+            return event.to_dict()
+        return {"id": id}
+    except Exception as e:
+        return {"error": f"Failed to get event: {str(e)}"}
+
+
+@mcp.tool
+def update_event(
+    id: str,
+    title: str = None,
+    description: str = None,
+    start_time: str = None,
+    end_time: str = None,
+    location: str = None,
+    status: str = None,
+) -> dict:
+    """Update an existing event by ID. Only fields you pass are modified; omit a field to leave it unchanged. Times in ISO format (e.g., '2026-01-14T02:16:17.478'). status is one of CONFIRMED, TENTATIVE, CANCELLED."""
+    try:
+        if not caldav_client.is_connected():
+            success = caldav_client.connect()
+            if not success:
+                return {"error": "Failed to connect to the calendar"}
+
+        event_data = {}
+        if title is not None:
+            event_data["title"] = title
+        if description is not None:
+            event_data["description"] = description
+        if start_time is not None:
+            event_data["start_time"] = _parse_to_tz(start_time)
+        if end_time is not None:
+            event_data["end_time"] = _parse_to_tz(end_time)
+        if location is not None:
+            event_data["location"] = location
+        if status is not None:
+            event_data["status"] = status
+
+        if not event_data:
+            return {"error": "No fields provided to update"}
+
+        result = caldav_client.update_event(id, event_data)
+        if not result:
+            return {"error": "Failed to update event"}
+        # Return the updated event
+        updated = caldav_client.read_event(id)
+        if updated is not None and hasattr(updated, "to_dict"):
+            return updated.to_dict()
+        return {"id": id, "updated": True}
+    except Exception as e:
+        return {"error": f"Failed to update event: {str(e)}"}
+
+
+@mcp.tool
 def delete_todo(id: str) -> dict:
     """Delete a todo from the calendar."""
     try:
@@ -247,8 +332,8 @@ def create_journal(
             "date": journal_date,
             "title": title,
             "description": content,
-            "tags": tags.split(",") or [],
-            "categories": categories.split(",") or [],
+            "tags": [t.strip() for t in tags_comma_seperated.split(",") if t.strip()],
+            "categories": [c.strip() for c in categories_comma_seperated.split(",") if c.strip()],
             "priority": priority,
             "url": url,
         }
