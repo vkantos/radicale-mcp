@@ -9,6 +9,9 @@ from models.event import Event
 from models.todo import Todo
 
 import caldav
+# caldav>=3.0 does not auto-import submodules, so davclient.get_davclient
+# becomes an AttributeError unless the submodule is explicitly loaded.
+import caldav.davclient  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
