@@ -3,7 +3,7 @@ Event Model for MCP CalDAV Application
 Represents calendar events with all relevant properties.
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 from models.base_model import BaseModel
 
@@ -25,6 +25,7 @@ class Event(BaseModel):
         url: str = "",
         vevent: Any = None,
         rrule: Any = None,
+        calendar_name: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -57,6 +58,7 @@ class Event(BaseModel):
         self.url = url
         self.vevent = vevent
         self.rrule = rrule
+        self.calendar_name = calendar_name
 
     def to_dict(self) -> Dict[str, Any]:
         """

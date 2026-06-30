@@ -3,7 +3,7 @@ Todo Model for MCP CalDAV Application
 Represents todo items with all relevant properties.
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 from models.base_model import BaseModel
 
@@ -22,6 +22,7 @@ class Todo(BaseModel):
         categories: List[str] = None,
         url: str = "",
         percent_complete: int = 0,
+        calendar_name: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -50,6 +51,7 @@ class Todo(BaseModel):
         self.categories = categories or []
         self.url = url
         self.percent_complete = percent_complete
+        self.calendar_name = calendar_name
 
     def to_dict(self) -> Dict[str, Any]:
         """

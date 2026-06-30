@@ -70,6 +70,8 @@ class ConfigManager:
             config["password"] = os.environ["CALDAV_PASSWORD"]
         if "CALDAV_USE_SSL" in os.environ:
             config["use_ssl"] = os.environ["CALDAV_USE_SSL"].lower() == "true"
+        if "CALDAV_TIMEZONE" in os.environ:
+            config["timezone"] = os.environ["CALDAV_TIMEZONE"]
 
         # Logging settings
         if "LOG_LEVEL" in os.environ:
@@ -94,6 +96,9 @@ class ConfigManager:
             config["use_ssl"] = True
         if "log_level" not in config:
             config["log_level"] = "INFO"
+
+    def get_timezone(self) -> str:
+        return os.environ.get("CALDAV_TIMEZONE", self.config.get("timezone", "UTC"))
 
     def get(self, key: str, default: Any = None) -> Any:
         """

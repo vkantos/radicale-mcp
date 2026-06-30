@@ -10,6 +10,7 @@ from config_manager import ConfigManager
 from models.event import Event
 from models.todo import Todo
 from datetime import datetime
+from typing import Optional
 import os
 from zoneinfo import ZoneInfo
 
@@ -20,14 +21,14 @@ mcp = FastMCP("Radicale MCP server 🚀")
 def _parse_to_tz(dt_str: str) -> datetime:
     """Parse ISO datetime string and convert to target timezone."""
     dt = datetime.fromisoformat(dt_str)
-    target_tz_name = os.getenv("TIMEZONE", "America/New_York")
+    target_tz_name = os.getenv("CALDAV_TIMEZONE", "UTC")
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=ZoneInfo(target_tz_name))
 
     try:
         target_tz = ZoneInfo(target_tz_name)
     except Exception:
-        target_tz = ZoneInfo("America/New_York")
+        target_tz = ZoneInfo("UTC")
     return dt.astimezone(target_tz)
 
 
@@ -36,17 +37,23 @@ config_manager = ConfigManager()
 caldav_client = CalDAVClient(config_manager)
 
 
-@mcp.tool
-def get_events() -> list:
-    """Get all events from the calendar."""
-    try:
-        # Check if connected, if not, connect
-        if not caldav_client.is_connected():
-            success = caldav_client.connect()
-            if not success:
-                return [{"error": "Failed to connect to the calendar"}]
+def _ensure_connected() -> Optional[dict]:
+    """Return error dict if connection fails, None if connected."""
+    if not caldav_client.is_connected():
+        success = caldav_client.connect()
+        if not success:
+            return {"error": "Failed to connect to the calendar"}
+    return None
 
-        events = caldav_client.get_events()
+
+@mcp.tool
+def get_events(calendar_name: Optional[str] = None) -> list:
+    """Get all events from the calendar. calendar_name selects which calendar to use (default: first)."""
+    try:
+        err = _ensure_connected()
+        if err:
+            return [err]
+        events = caldav_client.get_events(calendar_name=calendar_name)
         return [event.to_dict() for event in events]
     except Exception as e:
         return [{"error": f"Failed to get events: {str(e)}"}]
@@ -58,42 +65,25 @@ def connect() -> dict:
     try:
         success = caldav_client.connect()
         if success:
-            return {
-                "status": "connected",
-                "message": "Successfully connected to the calendar",
-            }
+            return {"status": "connected", "message": "Successfully connected to the calendar"}
         else:
             return {"status": "failed", "message": "Failed to connect to the calendar"}
     except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Error connecting to the calendar: {str(e)}",
-        }
+        return {"status": "error", "message": f"Error connecting to the calendar: {str(e)}"}
 
 
 @mcp.tool
 def reconnect() -> dict:
     """Reconnect to the calendar."""
     try:
-        # Disconnect first
         caldav_client.disconnect()
-        # Then reconnect
         success = caldav_client.connect()
         if success:
-            return {
-                "status": "reconnected",
-                "message": "Successfully reconnected to the calendar",
-            }
+            return {"status": "reconnected", "message": "Successfully reconnected to the calendar"}
         else:
-            return {
-                "status": "failed",
-                "message": "Failed to reconnect to the calendar",
-            }
+            return {"status": "failed", "message": "Failed to reconnect to the calendar"}
     except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Error reconnecting to the calendar: {str(e)}",
-        }
+        return {"status": "error", "message": f"Error reconnecting to the calendar: {str(e)}"}
 
 
 @mcp.tool
@@ -103,16 +93,14 @@ def create_event(
     end_time: str,
     description: str = "",
     location: str = "",
+    calendar_name: Optional[str] = None,
 ) -> dict:
-    """Create a new event on the calendar. Time in ISO format (e.g., '2026-01-14T02:16:17.478'). description and location are optional notes/place for the event."""
+    """Create a new event on the calendar. Time in ISO format (e.g., '2026-01-14T02:16:17.478'). description and location are optional notes/place for the event. calendar_name selects which calendar to use (default: first)."""
     try:
-        # Check if connected, if not, connect
-        if not caldav_client.is_connected():
-            success = caldav_client.connect()
-            if not success:
-                return {"error": "Failed to connect to the calendar"}
+        err = _ensure_connected()
+        if err:
+            return err
 
-        # Convert string timestamps to datetime objects
         start_dt = _parse_to_tz(start_time)
         end_dt = _parse_to_tz(end_time)
 
@@ -122,12 +110,12 @@ def create_event(
             location=location,
             start_time=start_dt,
             end_time=end_dt,
+            calendar_name=calendar_name,
         )
-        created_event_id = caldav_client.create_event(event)
+        created_event_id = caldav_client.create_event(event, calendar_name=calendar_name)
         if not created_event_id:
             return {"error": "Failed to create event"}
-        # Retrieve full Event object
-        event_obj = caldav_client.read_event(created_event_id)
+        event_obj = caldav_client.read_event(created_event_id, calendar_name=calendar_name)
         if hasattr(event_obj, "to_dict"):
             return event_obj.to_dict()
         return {"id": created_event_id}
@@ -145,27 +133,23 @@ def create_recurring_event(
     count: int = None,
     description: str = "",
     location: str = "",
+    calendar_name: Optional[str] = None,
 ) -> dict:
-    """Create a recurring event on the calendar. Time in ISO format (e.g., '2026-01-14T02:16:17.478'). Frequency (YEARLY, MONTHLY, WEEKLY, DAILY). Interval between recurrences (default: 1). Number of occurrences (optional). description and location are optional notes/place for the event."""
+    """Create a recurring event on the calendar. Time in ISO format (e.g., '2026-01-14T02:16:17.478'). Frequency (YEARLY, MONTHLY, WEEKLY, DAILY). Interval between recurrences (default: 1). Number of occurrences (optional). description and location are optional notes/place for the event. calendar_name selects which calendar to use (default: first)."""
     try:
-        # Check if connected, if not, connect
-        if not caldav_client.is_connected():
-            success = caldav_client.connect()
-            if not success:
-                return {"error": "Failed to connect to the calendar"}
+        err = _ensure_connected()
+        if err:
+            return err
 
-        # Build recurrence rule
         rrule = {"FREQ": frequency.upper()}
         if interval != 1:
             rrule["INTERVAL"] = interval
         if count:
             rrule["COUNT"] = count
 
-        # Parse timestamps
         start_dt = _parse_to_tz(start_time)
         end_dt = _parse_to_tz(end_time)
 
-        # Create Event with recurrence rule
         event = Event(
             title=title,
             description=description,
@@ -173,12 +157,12 @@ def create_recurring_event(
             start_time=start_dt,
             end_time=end_dt,
             rrule=rrule,
+            calendar_name=calendar_name,
         )
-        created_event_id = caldav_client.create_event(event)
+        created_event_id = caldav_client.create_event(event, calendar_name=calendar_name)
         if not created_event_id:
             return {"error": "Failed to create recurring event"}
-        # Retrieve full Event object
-        event_obj = caldav_client.read_event(created_event_id)
+        event_obj = caldav_client.read_event(created_event_id, calendar_name=calendar_name)
         if hasattr(event_obj, "to_dict"):
             return event_obj.to_dict()
         return {"id": created_event_id}
@@ -187,61 +171,52 @@ def create_recurring_event(
 
 
 @mcp.tool
-def get_todos() -> list:
-    """Get all todos from the calendar."""
+def get_todos(calendar_name: Optional[str] = None) -> list:
+    """Get all todos from the calendar. calendar_name selects which calendar to use (default: first)."""
     try:
-        # Check if connected, if not, connect
-        if not caldav_client.is_connected():
-            success = caldav_client.connect()
-            if not success:
-                return [{"error": "Failed to connect to the calendar"}]
-
-        todos = caldav_client.get_todos()
+        err = _ensure_connected()
+        if err:
+            return [err]
+        todos = caldav_client.get_todos(calendar_name=calendar_name)
         return [todo.to_dict() for todo in todos]
     except Exception as e:
         return [{"error": f"Failed to get todos: {str(e)}"}]
 
 
 @mcp.tool
-def get_journals() -> list:
-    """Get all journals from the calendar."""
+def get_journals(calendar_name: Optional[str] = None) -> list:
+    """Get all journals from the calendar. calendar_name selects which calendar to use (default: first)."""
     try:
-        # Check if connected, if not, connect
-        if not caldav_client.is_connected():
-            success = caldav_client.connect()
-            if not success:
-                return [{"error": "Failed to connect to the calendar"}]
-
-        journals = caldav_client.get_journals()
+        err = _ensure_connected()
+        if err:
+            return [err]
+        journals = caldav_client.get_journals(calendar_name=calendar_name)
         return journals
     except Exception as e:
         return [{"error": f"Failed to get journals: {str(e)}"}]
 
 
-# New delete_event tool
 @mcp.tool
-def delete_event(id: str) -> dict:
-    """Delete an event from the calendar."""
+def delete_event(id: str, calendar_name: Optional[str] = None) -> dict:
+    """Delete an event from the calendar. calendar_name selects which calendar to use (default: first)."""
     try:
-        if not caldav_client.is_connected():
-            success = caldav_client.connect()
-            if not success:
-                return {"error": "Failed to connect to the calendar"}
-        result = caldav_client.delete_event(id)
+        err = _ensure_connected()
+        if err:
+            return err
+        result = caldav_client.delete_event(id, calendar_name=calendar_name)
         return {"deleted": result}
     except Exception as e:
         return {"error": f"Failed to delete event: {str(e)}"}
 
 
 @mcp.tool
-def get_event(id: str) -> dict:
-    """Retrieve a single event by ID."""
+def get_event(id: str, calendar_name: Optional[str] = None) -> dict:
+    """Retrieve a single event by ID. calendar_name selects which calendar to use (default: first)."""
     try:
-        if not caldav_client.is_connected():
-            success = caldav_client.connect()
-            if not success:
-                return {"error": "Failed to connect to the calendar"}
-        event = caldav_client.read_event(id)
+        err = _ensure_connected()
+        if err:
+            return err
+        event = caldav_client.read_event(id, calendar_name=calendar_name)
         if event is None:
             return {"error": f"Event {id} not found"}
         if hasattr(event, "to_dict"):
@@ -260,13 +235,13 @@ def update_event(
     end_time: str = None,
     location: str = None,
     status: str = None,
+    calendar_name: Optional[str] = None,
 ) -> dict:
-    """Update an existing event by ID. Only fields you pass are modified; omit a field to leave it unchanged. Times in ISO format (e.g., '2026-01-14T02:16:17.478'). status is one of CONFIRMED, TENTATIVE, CANCELLED."""
+    """Update an existing event by ID. Only fields you pass are modified; omit a field to leave it unchanged. Times in ISO format (e.g., '2026-01-14T02:16:17.478'). status is one of CONFIRMED, TENTATIVE, CANCELLED. calendar_name selects which calendar to use (default: first)."""
     try:
-        if not caldav_client.is_connected():
-            success = caldav_client.connect()
-            if not success:
-                return {"error": "Failed to connect to the calendar"}
+        err = _ensure_connected()
+        if err:
+            return err
 
         event_data = {}
         if title is not None:
@@ -285,11 +260,10 @@ def update_event(
         if not event_data:
             return {"error": "No fields provided to update"}
 
-        result = caldav_client.update_event(id, event_data)
+        result = caldav_client.update_event(id, event_data, calendar_name=calendar_name)
         if not result:
             return {"error": "Failed to update event"}
-        # Return the updated event
-        updated = caldav_client.read_event(id)
+        updated = caldav_client.read_event(id, calendar_name=calendar_name)
         if updated is not None and hasattr(updated, "to_dict"):
             return updated.to_dict()
         return {"id": id, "updated": True}
@@ -298,17 +272,17 @@ def update_event(
 
 
 @mcp.tool
-def delete_todo(id: str) -> dict:
-    """Delete a todo from the calendar."""
+def delete_todo(id: str, calendar_name: Optional[str] = None) -> dict:
+    """Delete a todo from the calendar. calendar_name selects which calendar to use (default: first)."""
     try:
-        if not caldav_client.is_connected():
-            success = caldav_client.connect()
-            if not success:
-                return {"error": "Failed to connect to the calendar"}
-        result = caldav_client.delete_todo(id)
+        err = _ensure_connected()
+        if err:
+            return err
+        result = caldav_client.delete_todo(id, calendar_name=calendar_name)
         return {"deleted": result}
     except Exception as e:
         return {"error": f"Failed to delete todo: {str(e)}"}
+
 
 @mcp.tool
 def create_journal(
@@ -319,14 +293,13 @@ def create_journal(
     categories_comma_seperated: str = "",
     priority: int = 5,
     url: str = "",
+    calendar_name: Optional[str] = None,
 ) -> dict:
-    """Create a new journal entry on the calendar. Dates in ISO format."""
+    """Create a new journal entry on the calendar. Dates in ISO format. calendar_name selects which calendar to use (default: first)."""
     try:
-        if not caldav_client.is_connected():
-            success = caldav_client.connect()
-            if not success:
-                return {"error": "Failed to connect to the calendar"}
-        # Parse date
+        err = _ensure_connected()
+        if err:
+            return err
         journal_date = _parse_to_tz(date) if date else None
         journal_data = {
             "date": journal_date,
@@ -337,36 +310,37 @@ def create_journal(
             "priority": priority,
             "url": url,
         }
-        created_journal_id = caldav_client.create_journal(journal_data)
+        created_journal_id = caldav_client.create_journal(journal_data, calendar_name=calendar_name)
         return {"id": created_journal_id}
     except Exception as e:
         return {"error": f"Failed to create journal: {str(e)}"}
 
+
 @mcp.tool
-def delete_journal(id: str) -> dict:
-    """Delete a journal entry from the calendar."""
+def delete_journal(id: str, calendar_name: Optional[str] = None) -> dict:
+    """Delete a journal entry from the calendar. calendar_name selects which calendar to use (default: first)."""
     try:
-        if not caldav_client.is_connected():
-            success = caldav_client.connect()
-            if not success:
-                return {"error": "Failed to connect to the calendar"}
-        result = caldav_client.delete_journal(id)
+        err = _ensure_connected()
+        if err:
+            return err
+        result = caldav_client.delete_journal(id, calendar_name=calendar_name)
         return {"deleted": result}
     except Exception as e:
         return {"error": f"Failed to delete journal: {str(e)}"}
 
+
 @mcp.tool
-def get_journal(journal_id: str) -> dict:
-    """Retrieve a journal entry by its ID."""
+def get_journal(journal_id: str, calendar_name: Optional[str] = None) -> dict:
+    """Retrieve a journal entry by its ID. calendar_name selects which calendar to use (default: first)."""
     try:
-        if not caldav_client.is_connected():
-            success = caldav_client.connect()
-            if not success:
-                return {"error": "Failed to connect to the calendar"}
-        journal = caldav_client.read_journal(journal_id)
+        err = _ensure_connected()
+        if err:
+            return err
+        journal = caldav_client.read_journal(journal_id, calendar_name=calendar_name)
         return journal
     except Exception as e:
         return {"error": f"Failed to get journal: {str(e)}"}
+
 
 @mcp.tool
 def create_todo(
@@ -379,20 +353,17 @@ def create_todo(
     categories_comma_seperated: str = "",
     url: str = "",
     percent_complete: int = 0,
+    calendar_name: Optional[str] = None,
 ) -> dict:
-    """Create a new todo on the calendar. Time in ISO format (e.g., '2026-01-14T02:16:17.478')"""
+    """Create a new todo on the calendar. Time in ISO format (e.g., '2026-01-14T02:16:17.478'). calendar_name selects which calendar to use (default: first)."""
     try:
-        # Ensure connection
-        if not caldav_client.is_connected():
-            success = caldav_client.connect()
-            if not success:
-                return {"error": "Failed to connect to the calendar"}
+        err = _ensure_connected()
+        if err:
+            return err
 
-        # Parse dates if provided
         due_dt = _parse_to_tz(due_date) if due_date else None
         completed_dt = _parse_to_tz(completion_date) if completion_date else None
 
-        # Build Todo instance
         todo = Todo(
             title=title,
             description=description,
@@ -403,8 +374,9 @@ def create_todo(
             categories=categories_comma_seperated.split(","),
             url=url,
             percent_complete=percent_complete,
+            calendar_name=calendar_name,
         )
-        created_todo_id = caldav_client.create_todo(todo)
+        created_todo_id = caldav_client.create_todo(todo, calendar_name=calendar_name)
         return {"id": created_todo_id}
     except Exception as e:
         return {"error": f"Failed to create todo: {str(e)}"}
@@ -416,5 +388,4 @@ def start_server():
 
 
 if __name__ == "__main__":
-    # Run the MCP server using STDIO transport
     start_server()
